@@ -70,9 +70,11 @@ class Query:
         x.match = 'strict'
         return x
 
-def breakLocation(location):
+def breakLocation(location, street):
     #Extract out any secondary parts of the location, like unit numbers. Return a tuple (primary, secondary)
-    pass
+    assert(street in location)
+    streetStartIndex = location.find(street)
+    return (location[0:(streetStartIndex + len(street))].strip(), location[(streetStartIndex + len(street))::].strip())
 
 while True:
     streetHeads = next(recordIter)
@@ -84,7 +86,7 @@ while True:
             head  = streetHeads.pop()
             if head:
                 city = cities[streetToCityIndex[head['street']]]
-                primary, secondary = breakLocation(head['location'])
+                primary, secondary = breakLocation(head['location'], head['street'])
                 queries.append(Query(primary, secondary, city, state))
 
         if queries:
@@ -116,14 +118,6 @@ while True:
                     analysis = candidates[0].analysis
                     queries[i] = None
                     #TODO Valid address. Place necessary information into spreadsheet. 
-            queries = [i for i in queries if i]
-                    
-        
-while numStreetsRemaining > 0:
-    batch = Batch()
-    streetIndex = 0
-    while len(batch) < BATCH_SIZE and streetIndex < len(streets):
-        if streets
-        
+            queries = [i for i in queries if i]                      
         
         
