@@ -76,6 +76,12 @@ def breakLocation(location, street):
     streetStartIndex = location.find(street)
     return (location[0:(streetStartIndex + len(street))].strip(), location[(streetStartIndex + len(street))::].strip())
 
+
+outputFile = open(args.output, 'w')
+
+fieldnames = visionHeaders + ['location_valid', 'location_components', 'location_analysis', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
+
+fieldnames.extend(['owner_address_valid', 'owner_address_components', 'owner_address_analysis', 'owner_address_metadata', 'owner_address_footnote_Csharp', 'owner_address_footnote_Dsharp', 'owner_address_footnote_Fsharp', 'owner_address_footnote_Hsharp', 'owner_address_footnote_Isharp', 'owner_address_footnote_Ssharp', 'owner_address_footnote_Vsharp', 'owner_address_footnote_Wsharp'])
 while True:
     streetHeads = next(recordIter)
     if not any(streetHeads):
