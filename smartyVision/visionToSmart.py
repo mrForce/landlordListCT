@@ -2,6 +2,7 @@ import csv
 import argparse
 import collections
 import itertools
+import json
 from smartystreets_python_sdk import StaticCredentials, exceptions, ClientBuilder
 from smartystreets_python_sdk.us_street import Lookup as StreetLookup
 
@@ -52,12 +53,13 @@ creds = StaticCredentials('87f20fb5-a479-c2a6-61fc-f97766549421', 'aPjLRYlSqap2Q
 client = ClientBuilder(creds).build_us_street_api_client()
 
 class Query:
-    def __init__(self, streetAddress, secondary, city, state, street):
+    def __init__(self, streetAddress, secondary, city, state, street, record):
         self.streetAddress = streetAddress
         self.secondary = secondary
         self.city = city
         self.state = state
         self.street = street
+        self.record = record
     def setCity(self, city):
         self.city = city
     def makeStreetLookup(self, input_id):
@@ -81,7 +83,14 @@ outputFile = open(args.output, 'w')
 
 fieldnames = visionHeaders + ['location_valid', 'location_components', 'location_analysis', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
 
-fieldnames.extend(['owner_address_valid', 'owner_address_components', 'owner_address_analysis', 'owner_address_metadata', 'owner_address_footnote_Csharp', 'owner_address_footnote_Dsharp', 'owner_address_footnote_Fsharp', 'owner_address_footnote_Hsharp', 'owner_address_footnote_Isharp', 'owner_address_footnote_Ssharp', 'owner_address_footnote_Vsharp', 'owner_address_footnote_Wsharp'])
+footnoteMap = [('location_footnote_Csharp', 'C#'), ('location_footnote_Dsharp', 'D#'), ('location_footnote_Fsharp', 'F#'), ('location_footnote_Hsharp', 'H#'), ('location_footnote_Isharp', 'I#'), ('location_footnote_Ssharp', 'S#'), ('location_footnote_Vsharp', 'V#'), ('location_footnote_Wsharp', 'W#')]
+
+#fieldnames.extend(['owner_address_valid', 'owner_address_components', 'owner_address_analysis', 'owner_address_metadata', 'owner_address_footnote_Csharp', 'owner_address_footnote_Dsharp', 'owner_address_footnote_Fsharp', 'owner_address_footnote_Hsharp', 'owner_address_footnote_Isharp', 'owner_address_footnote_Ssharp', 'owner_address_footnote_Vsharp', 'owner_address_footnote_Wsharp'])
+writer = csv.DictWriter(outputFile, fieldnames=fieldnames, delimiter='\t')
+writer.writeheader()
+
+#ownerAddressToComponents = {}
+
 while True:
     streetHeads = next(recordIter)
     if not any(streetHeads):
@@ -93,7 +102,7 @@ while True:
             if head:
                 city = cities[streetToCityIndex[head['street']]]
                 primary, secondary = breakLocation(head['location'], head['street'])
-                queries.append(Query(primary, secondary, city, state))
+                queries.append(Query(primary, secondary, city, state, head))
 
         if queries:
             lookups = [queries[i].makeStreetLookup(i) for i in range(0, len(queries))]
@@ -114,6 +123,9 @@ while True:
                     if cityIndex == len(cities) - 1:
                         streetToCityIndex[street] = 0
                         #TODO Invalid address. Place into spreadsheet
+                        record = queries[i].record
+                        record['location_valid'] = 'INVALID'
+                        writer.writerow(record)
                         queries[i] = None
                     else:
                         streetToCityIndex[street] += 1
