@@ -3,7 +3,7 @@ import argparse
 import collections
 import itertools
 import json
-from smartystreets_python_sdk import StaticCredentials, exceptions, ClientBuilder
+from smartystreets_python_sdk import StaticCredentials, exceptions, Batch, ClientBuilder
 from smartystreets_python_sdk.us_street import Lookup as StreetLookup
 
 
@@ -28,21 +28,23 @@ def extractLines(fileName):
     return lines
 state = 'CT'
 cities = extractLines(args.cities)
+numCities = len(cities)
+assert(numCities >= 1)
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
 streets = collections.defaultdict(list)
 with open(args.inputTSV, 'r') as f:
     reader = csv.DictReader(f, delimiter='\t')
     visionHeaders = reader.fieldnames
-    assert('landuse' in visionHeaders)
+    assert('landUse' in visionHeaders)
     for row in reader:
-        if row['landuse'].strip().upper() in landUseCodes:
+        if row['landUse'].strip().upper() in landUseCodes:
             streets[row['street'].strip()].append(dict(row))
 
 streetToCityIndex = {}
 for streetName in streets.keys():
     streets[streetName].sort(key=lambda x: int(x['location'].split()[0]) if x['location'].split()[0].isdigit() else 0)
-    streetToCityIndex[streetName] = 0
+    streetToCityIndex[streetName] = (0, numCities)
 
 batchSize = min(100, len(streets))
 
@@ -65,10 +67,14 @@ class Query:
     def makeStreetLookup(self, input_id):
         x = StreetLookup()
         x.input_id = input_id
+        #Note that the Lookup expects street to be the street address i.e. 39 Butler Street, not just the street (Butler Street)
         x.street = self.streetAddress
-        x.secondary = self.secondary
-        x.city = city
-        x.state = state
+        print('street')
+        print(x.street)
+        if self.secondary:
+            x.secondary = self.secondary
+        x.city = self.city
+        x.state = self.state
         x.match = 'strict'
         return x
 
@@ -81,7 +87,7 @@ def breakLocation(location, street):
 
 outputFile = open(args.output, 'w')
 
-fieldnames = visionHeaders + ['location_valid', 'location_components', 'location_analysis', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
+fieldnames = visionHeaders + ['location_valid', 'city', 'zip', 'plus4_code', 'delivery_point', 'location_components', 'location_footnotes', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
 
 footnoteMap = [('location_footnote_Csharp', 'C#'), ('location_footnote_Dsharp', 'D#'), ('location_footnote_Fsharp', 'F#'), ('location_footnote_Hsharp', 'H#'), ('location_footnote_Isharp', 'I#'), ('location_footnote_Ssharp', 'S#'), ('location_footnote_Vsharp', 'V#'), ('location_footnote_Wsharp', 'W#')]
 
@@ -91,51 +97,71 @@ writer.writeheader()
 
 #ownerAddressToComponents = {}
 
-while True:
-    streetHeads = next(recordIter)
-    if not any(streetHeads):
-        break
+for streetHeadsTuple in recordIter:
     queries = []
-    while len(streetHeads) > 0:
+    streetHeads = list(streetHeadsTuple)
+    while len(streetHeads) > 0 or len(queries) > 0:
         while len(queries) < batchSize and len(streetHeads) > 0:
             head  = streetHeads.pop()
             if head:
-                city = cities[streetToCityIndex[head['street']]]
+                city = cities[streetToCityIndex[head['street']][0]]
                 primary, secondary = breakLocation(head['location'], head['street'])
-                queries.append(Query(primary, secondary, city, state, head))
+                queries.append(Query(primary, secondary, city, state, head['street'], dict(head)))
 
         if queries:
-            lookups = [queries[i].makeStreetLookup(i) for i in range(0, len(queries))]
+            lookups = [queries[i].makeStreetLookup(str(i)) for i in range(0, len(queries))]
             batch = Batch()
             for x in lookups:
+                print('lookup')
+                print(vars(x))
                 batch.add(x)
-            assert(len(batch) == len(lookups))
+            #assert(len(batch) == len(lookups))
             try:
                 client.send_batch(batch)
             except exceptions.SmartyException as err:
                 print(err)
-                return
+                assert(False)
             for i, lookup in enumerate(batch):
-                candidates = lookup.result                
+                print('query: ')
+                print(vars(queries[i]))
+                candidates = lookup.result
+                print('candidates')
+                print(candidates)
+                street = queries[i].street
+                cityIndex, numTriesRemaining = streetToCityIndex[street]
                 if len(candidates) == 0:
-                    street = queries[i].street
-                    cityIndex = streetToCityIndex[street]
-                    if cityIndex == len(cities) - 1:
-                        streetToCityIndex[street] = 0
-                        #TODO Invalid address. Place into spreadsheet
+                    if numTriesRemaining == 0:
+                        streetToCityIndex[street] = (0, numCities)
+                        #Invalid address. Place into spreadsheet
                         record = queries[i].record
                         record['location_valid'] = 'INVALID'
                         writer.writerow(record)
                         queries[i] = None
                     else:
-                        streetToCityIndex[street] += 1
-                        queries[i].city = cities[streetToCityIndex[street]]
+                        cityIndex = (cityIndex + 1) % numCities
+                        streetToCityIndex[street] = (cityIndex, numTriesRemaining - 1)
+                        queries[i].city = cities[cityIndex]
                 else:
+                    streetToCityIndex[street] = (cityIndex, numCities)
                     components = candidates[0].components
                     metadata = candidates[0].metadata
                     analysis = candidates[0].analysis
-                    queries[i] = None
-                    #TODO Valid address. Place necessary information into spreadsheet. 
+                    #TODO Valid address. Place necessary information into spreadsheet.
+                    record = queries[i].record
+                    record['location_valid'] = 'VALID'
+                    record['city'] = components.city_name
+                    record['zip'] = components.zipcode
+                    record['plus4_code'] = str(components.plus4_code)
+                    record['delivery_point'] = components.delivery_point
+                    record['location_components'] = json.dumps(vars(components))
+                    record['location_metadata'] = json.dumps(vars(metadata))
+                    record['location_footnotes'] = analysis.footnotes
+                    for field, footnote in footnoteMap:                        
+                        if analysis.footnotes and footnote in analysis.footnotes:
+                            record[field] = 'TRUE'
+                    writer.writerow(record)
+                    queries[i] = None                    
+                    
             queries = [i for i in queries if i]                      
-        
+            
         

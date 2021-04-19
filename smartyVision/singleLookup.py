@@ -9,12 +9,10 @@ client = ClientBuilder(creds).build_us_street_api_client()
 
 lookup = StreetLookup()
 lookup.input_id='1'
-lookup.street='850 East Main Street'
-lookup.secondary='apt 100'
-lookup.city='stamford'
+lookup.street='25 BUTLER STREET'
+lookup.city='GREENWICH'
 lookup.state='CT'
-lookup.match='invalid'
-lookup.candidates=10
+lookup.match='strict'
 
 client.send_lookup(lookup)
 
@@ -26,3 +24,4 @@ for candidate in result:
     print(vars(candidate.metadata))
     print(vars(candidate.analysis))
     print(vars(candidate))
+    print(candidate.analysis.footnotes)
