@@ -32,19 +32,24 @@ numCities = len(cities)
 assert(numCities >= 1)
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
-streets = collections.defaultdict(list)
+Parcel = collections.namedtuple('Parcel', ['mblu', 'locations'])
+parcels = {}
 with open(args.inputTSV, 'r') as f:
     reader = csv.DictReader(f, delimiter='\t')
     visionHeaders = reader.fieldnames
     assert('landUse' in visionHeaders)
     for row in reader:
         if row['landUse'].strip().upper() in landUseCodes:
-            streets[row['street'].strip()].append(dict(row))
+            pid = row['pid'].strip()
+            mblu = row['mblu'].strip()
+            location = row['location'].strip()
+            if pid in parcels:
+                assert(mblu.strip() == parcels[pid].mblu)
+                parcels[pid].locations.append(location)
+            else:
+                parcels[pid] = Parcel(mblu, [location])
 
-streetToCityIndex = {}
-for streetName in streets.keys():
-    streets[streetName].sort(key=lambda x: int(x['location'].split()[0]) if x['location'].split()[0].isdigit() else 0)
-    streetToCityIndex[streetName] = (0, numCities)
+
 
 batchSize = min(100, len(streets))
 
@@ -53,6 +58,18 @@ recordIter = itertools.zip_longest(*streets.values())
 creds = StaticCredentials('87f20fb5-a479-c2a6-61fc-f97766549421', 'aPjLRYlSqap2Q30bO5eM')
 
 client = ClientBuilder(creds).build_us_street_api_client()
+
+
+
+class MBLU:
+    def __init__(self, string):
+        self.mbluString = string
+        parts = string.split('/')
+        assert(len(parts) == 5)
+        self.map = parts[0].strip()
+        self.block = parts[1].strip()
+        self.lot = parts[2].strip()
+        self.unit = parts[3].strip()
 
 class Query:
     def __init__(self, streetAddress, secondary, city, state, street, record):
