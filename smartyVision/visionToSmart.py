@@ -32,7 +32,38 @@ numCities = len(cities)
 assert(numCities >= 1)
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
-Parcel = collections.namedtuple('Parcel', ['mblu', 'locations'])
+class Parcel:
+    def __init__(self, pid, mblu, location, firstStreet, firstRow):
+        self.pid = pid
+        self.mblu = mblu
+        self.location = location
+        self.streets = [firstStreet]
+        self.rows = [firstRow]
+        self.inputIDList = None
+    def addStreet(self, street, row):
+        self.streets.append(street)
+        self.rows.append(row)
+    def assignInputIDs(self, base):
+        #assign an input ID for each street. Each street will be paired with the location and mblu to create a smarty streets lookup
+        #return the base + number of streets (the base for the next Parcel)
+        assert(self.inputIDList is None)
+        assert(len(self.streets) == len(self.rows))
+        self.inputIDList = list(range(base, base + len(self.streets)))
+        return base + len(self.streets)
+    def getLookup(self):
+        #return a Lookup object. Split on the street to remove any unit numbers in the location. Use the MBLU to provide secondary. 
+        pass
+    def setResult(self, inputID, result):
+        """
+        Store the result. If all of the streets have results, then compare them. There are a few scenarios to worry about here:
+
+        1) None of the lookups returned valid candidate. Signal to the user that the address is invalid. 
+        2) One lookup returned a valid candidate. Write to the valid output spreadsheet
+        3) Multiple lookups returned valid candidates, that are consistent with one another. Arbitrarily pick one and write to spreadsheet
+        4) Multiple lookups returned valid candidates, but they are inconsistent with one another. Signal to the user that this is the case. 
+        """
+        pass
+Parcel = collections.namedtuple('Parcel', ['mblu', 'location', 'streets'])
 parcels = {}
 with open(args.inputTSV, 'r') as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -43,12 +74,15 @@ with open(args.inputTSV, 'r') as f:
             pid = row['pid'].strip()
             mblu = row['mblu'].strip()
             location = row['location'].strip()
+            street = row['street'].strip()
             if pid in parcels:
                 assert(mblu.strip() == parcels[pid].mblu)
-                parcels[pid].locations.append(location)
+                assert(location.strip() == parcels[pid].location)
+                parcels[pid].streets.add(street)
             else:
-                parcels[pid] = Parcel(mblu, [location])
+                parcels[pid] = Parcel(mblu, location, set([street]))
 
+parcelLocationCounter = collections.Counter()
 
 
 batchSize = min(100, len(streets))
