@@ -32,14 +32,38 @@ numCities = len(cities)
 assert(numCities >= 1)
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
+
+outputFile = open(args.output, 'w')
+
+fieldnames = visionHeaders + ['location_valid', 'city', 'zip', 'plus4_code', 'delivery_point', 'location_components', 'location_footnotes', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
+
+footnoteMap = [('location_footnote_Csharp', 'C#'), ('location_footnote_Dsharp', 'D#'), ('location_footnote_Fsharp', 'F#'), ('location_footnote_Hsharp', 'H#'), ('location_footnote_Isharp', 'I#'), ('location_footnote_Ssharp', 'S#'), ('location_footnote_Vsharp', 'V#'), ('location_footnote_Wsharp', 'W#')]
+
+writer = csv.DictWriter(outputFile, fieldnames=fieldnames, delimiter='\t')
+writer.writeheader()
+
+class OutputWriter:
+    def __init__(self, csvWriter, fields, footnoteMap):
+        self.csvWriter = csvWriter
+        self.fields = fields
+        self.footnoteMap = footnoteMap
+    def writeRow(self, inputRow, candidate):
+        #extract footnotes, write to spreadsheet
+        pass
+
+outputHandler = OutputWriter(writer, fieldnames, footnoteMap)
 class Parcel:
-    def __init__(self, pid, mblu, location, firstStreet, firstRow):
+    def __init__(self, pid, mblu, location, firstStreet, firstRow, outputHandler):
         self.pid = pid
         self.mblu = mblu
         self.location = location
         self.streets = [firstStreet]
         self.rows = [firstRow]
         self.inputIDList = None
+        #map input ID to result
+        self.results = {}
+        self.outputHandler = outputHandler
+    #there are some properties (indicated by property ID) that have duplicate entries, but are marked as being on different streets. 
     def addStreet(self, street, row):
         self.streets.append(street)
         self.rows.append(row)
@@ -53,16 +77,45 @@ class Parcel:
     def getLookups(self):
         #return a list of Lookup objects. Split on the street to remove any unit numbers in the location. Use the MBLU to provide secondary. 
         pass
-    def setResult(self, inputID, result):
+    def writeParcel(self, candidate):
+        pass
+    def signalParcelInvalid(self):
+        pass
+    def signalParcelContradiction(self):
+        pass
+    def finalize(self):
         """
-        Store the result. If all of the streets have results, then compare them. There are a few scenarios to worry about here:
+        All of the lookups have results. There are a few scenarios to worry about here:
 
         1) None of the lookups returned valid candidate. Signal to the user that the address is invalid. 
         2) One lookup returned a valid candidate. Write to the valid output spreadsheet
         3) Multiple lookups returned valid candidates, that are consistent with one another. Arbitrarily pick one and write to spreadsheet
         4) Multiple lookups returned valid candidates, but they are inconsistent with one another. Signal to the user that this is the case. 
+
+        The criteria for consistency is that the delivery point is the same. 
         """
-        pass
+        deliveryPoints = set()
+        candidate = None
+        for inputID, result in self.results.items():
+            if len(result) > 0:
+                assert(len(result) == 1)
+                candidate = result[0]
+                assert(candidate.components.zipcode)
+                assert(candidate.components.plus4_code)
+                assert(candidate.components.delivery_point >= 0)
+                deliveryPoint = str(candidate.components.zipcode) + str(candidate.components.plus4_code) + str(components.delivery_point)
+                deliveryPoints.add(deliveryPoint)
+        if len(deliveryPoints) == 1:
+            self.writeParcel(candidate)
+        elif len(deliveryPoints) == 0:
+            self.signalParcelInvalid()
+        else:
+            self.signalParcelContradiction()
+    def setResult(self, inputID, result):
+        assert(inputID not in self.results)
+        self.results[inputID] = result
+        if len(self.results) == len(self.inputIDList):
+            self.finalize()
 parcels = {}
 with open(args.inputTSV, 'r') as f:
     reader = csv.DictReader(f, delimiter='\t')
@@ -79,27 +132,20 @@ with open(args.inputTSV, 'r') as f:
                 assert(location.strip() == parcels[pid].location)
                 parcels[pid].addStreet(street, row)
             else:
-                parcels[pid] = Parcel(pid, mblu, location, street, row)
+                parcels[pid] = Parcel(pid, mblu, location, street, row, outputHandler)
 
 base = 0
 for pid, parcel in parcels.items():
-    base = percels[pid].assignInputIDs(base)
+    base = parcels[pid].assignInputIDs(base)
 
 lookups = []
 batchsize=100
-#in case a parcel pushes us over the edge. 
-remainder = []
 creds = StaticCredentials('87f20fb5-a479-c2a6-61fc-f97766549421', 'aPjLRYlSqap2Q30bO5eM')
 client = ClientBuilder(creds).build_us_street_api_client()
 
-outputFile = open(args.output, 'w')
-
-fieldnames = visionHeaders + ['location_valid', 'city', 'zip', 'plus4_code', 'delivery_point', 'location_components', 'location_footnotes', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
-
-footnoteMap = [('location_footnote_Csharp', 'C#'), ('location_footnote_Dsharp', 'D#'), ('location_footnote_Fsharp', 'F#'), ('location_footnote_Hsharp', 'H#'), ('location_footnote_Isharp', 'I#'), ('location_footnote_Ssharp', 'S#'), ('location_footnote_Vsharp', 'V#'), ('location_footnote_Wsharp', 'W#')]
 
 lookupIter = itertools.chain.from_iterable(map(parcel.items(), lambda pid, parcel: [(pid, lookup) for lookup in parcel.getLookups()]))
-for lookupSlice in itertools.islice(lookupIter, 100):
+for lookupSlice in itertools.islice(lookupIter, batchsize):
     lookupList = list(lookupSlice)
     batch = Batch()
     for pid, lookup in lookupList:
@@ -113,16 +159,11 @@ for lookupSlice in itertools.islice(lookupIter, 100):
     for i, lookup in enumerate(batch):
         pid = lookupList[i][0]
         parcels[pid].setResult(lookup.input_id, lookup.result)
-    
-for pid, parcel in parcels.items():
-    if len(batch) == 0 and len(remainder) > 
-    pLookups = parcel.getLookups()
-    i = 0
-    while i < len(pLookups) and len(batch) < batchsize:
-        batch.add(pLookups[i])
-    if i < len(pLookups):
         
-
+"""
+What's below this is from previous script version, will remove when finished with this version. 
+"""
+        
 class MBLU:
     def __init__(self, string):
         self.mbluString = string
