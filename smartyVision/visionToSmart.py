@@ -33,6 +33,10 @@ city = args.city
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
 
+with open(args.inputTSV, 'r') as f:
+    reader = csv.DictReader(f, delimiter='\t')
+    visionHeaders = reader.fieldnames
+    
 outputFile = open(args.output, 'w')
 
 fieldnames = visionHeaders + ['location_valid', 'city', 'zip', 'plus4_code', 'delivery_point', 'location_components', 'location_footnotes', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
@@ -90,7 +94,7 @@ class Parcel:
         #return the base + number of streets (the base for the next Parcel)
         assert(self.inputIDList is None)
         assert(len(self.streets) == len(self.rows))
-        self.inputIDList = list(range(base, base + len(self.streets)))
+        self.inputIDList = [str(x) for x in range(base, base + len(self.streets))]
         return base + len(self.streets)
     def getLookups(self):
         #return a list of Lookup objects. Split on the street to remove any unit numbers in the location. Use the MBLU to provide secondary.        
@@ -147,7 +151,7 @@ class Parcel:
                 candidateRow = self.rows[self.inputIDList.index(inputID)]
                 assert(candidate.components.zipcode)
                 assert(candidate.components.plus4_code)
-                assert(candidate.components.delivery_point >= 0)
+                assert(candidate.components.delivery_point)
                 deliveryPoint = str(candidate.components.zipcode) + str(candidate.components.plus4_code) + str(candidate.components.delivery_point)
                 deliveryPoints.add(deliveryPoint)
         if len(deliveryPoints) == 1:
@@ -176,6 +180,9 @@ with open(args.inputTSV, 'r') as f:
             street = row['street'].strip()
             if pid in parcels:
                 assert(mblu.strip() == parcels[pid].mblu)
+                if location.strip() != parcels[pid].location:
+                    print('location: ' + location.strip())
+                    print(parcels[pid].location)
                 assert(location.strip() == parcels[pid].location)
                 parcels[pid].addStreet(street, row)
             else:
@@ -191,9 +198,12 @@ creds = StaticCredentials('87f20fb5-a479-c2a6-61fc-f97766549421', 'aPjLRYlSqap2Q
 client = ClientBuilder(creds).build_us_street_api_client()
 
 
-lookupIter = itertools.chain.from_iterable(map(parcel.items(), lambda pid, parcel: [(pid, lookup) for lookup in parcel.getLookups()]))
-for lookupSlice in itertools.islice(lookupIter, batchsize):
-    lookupList = list(lookupSlice)
+lookupIter = itertools.chain.from_iterable(map(lambda pidAndParcel: [(pidAndParcel[0], lookup) for lookup in pidAndParcel[1].getLookups()], parcels.items()))
+while True:
+    lookupList = list(itertools.islice(lookupIter, batchsize))
+    if len(lookupList) == 0:
+        break
+    print(lookupList)
     batch = Batch()
     for pid, lookup in lookupList:
         batch.add(lookup)
