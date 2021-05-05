@@ -1,4 +1,5 @@
 import csv
+import sys
 import argparse
 import collections
 import itertools
@@ -46,22 +47,25 @@ class OutputWriter:
         self.csvWriter = csvWriter
         self.fields = fields
         self.footnoteMap = footnoteMap
-    def writeRow(self, inputRow, candidate):
+    def writeRow(self, inputRow, candidate, valid):
         #extract footnotes, write to spreadsheet
-        components = candidate.components
-        metadata = candidate.metadata
-        analysis = candidate.analysis
-        inputRow['location_valid'] = 'VALID'
-        inputRow['city'] = components.city_name
-        inputRow['zip'] = components.zipcode
-        inputRow['plus4_code'] = str(components.plus4_code)
-        inputRow['delivery_point'] = components.delivery_point
-        inputRow['location_components'] = json.dumps(vars(components))
-        inputRow['location_metadata'] = json.dumps(vars(metadata))
-        inputRow['location_footnotes'] = analysis.footnotes
-        for field, footnote in self.footnoteMap:                        
-            if analysis.footnotes and footnote in analysis.footnotes:
-                inputRow[field] = 'TRUE'
+        if valid:
+            components = candidate.components
+            metadata = candidate.metadata
+            analysis = candidate.analysis
+            inputRow['location_valid'] = 'VALID'
+            inputRow['city'] = components.city_name
+            inputRow['zip'] = components.zipcode
+            inputRow['plus4_code'] = str(components.plus4_code)
+            inputRow['delivery_point'] = components.delivery_point
+            inputRow['location_components'] = json.dumps(vars(components))
+            inputRow['location_metadata'] = json.dumps(vars(metadata))
+            inputRow['location_footnotes'] = analysis.footnotes
+            for field, footnote in self.footnoteMap:                        
+                if analysis.footnotes and footnote in analysis.footnotes:
+                    inputRow[field] = 'TRUE'
+        else:
+            inputRow['location_valid'] = 'INVALID'
         self.csvWriter.writerow(inputRow)
 outputHandler = OutputWriter(writer, fieldnames, footnoteMap)
 class Parcel:
@@ -109,12 +113,18 @@ class Parcel:
             x.state = self.state
             lookups.append(x)
         return lookups
-    def writeParcel(self, candidateRow, candidate):
-        self.outputHandler.writeRow(candidateRow, candidate)
+    def writeParcel(self, candidateRow, candidate, valid):
+        self.outputHandler.writeRow(candidateRow, candidate, valid)
     def signalParcelInvalid(self):
-        pass
+        sys.stderr.write('Parcel with PID: {}, location: {} and streets: {} was invalid\n'.format(self.pid, self.location, str(self.streets)))
     def signalParcelContradiction(self):
-        pass
+        sys.stderr.write('Parcel with PID: {}, location: {} and streets: {} had contradictory candidates. Here are the streets and their corresponding lookups: \n'.format(self.pid, self.location, str(self.streets)))
+        for inputID, completedLookup in self.results.items():
+            result = completedLookup.result
+            if len(result) > 0:
+                assert(len(result) == 1)
+                sys.stderr.write('Street: {}, lookup: {}\n'.format(str(self.streets[self.inputIDList.index(inputID)]), str(vars(completedLookup))))
+
     def finalize(self):
         """
         All of the lookups have results. There are a few scenarios to worry about here:
@@ -129,7 +139,8 @@ class Parcel:
         deliveryPoints = set()
         candidate = None
         candidateRow = None
-        for inputID, result in self.results.items():
+        for inputID, completedLookup in self.results.items():
+            result = completedLookup.result
             if len(result) > 0:
                 assert(len(result) == 1)
                 candidate = result[0]
@@ -137,17 +148,19 @@ class Parcel:
                 assert(candidate.components.zipcode)
                 assert(candidate.components.plus4_code)
                 assert(candidate.components.delivery_point >= 0)
-                deliveryPoint = str(candidate.components.zipcode) + str(candidate.components.plus4_code) + str(components.delivery_point)
+                deliveryPoint = str(candidate.components.zipcode) + str(candidate.components.plus4_code) + str(candidate.components.delivery_point)
                 deliveryPoints.add(deliveryPoint)
         if len(deliveryPoints) == 1:
-            self.writeParcel(candidateRow, candidate)
+            self.writeParcel(candidateRow, candidate, True)
         elif len(deliveryPoints) == 0:
+            for x in self.rows:                
+                self.writeParcel(x, None, False)
             self.signalParcelInvalid()
         else:
             self.signalParcelContradiction()
-    def setResult(self, inputID, result):
+    def setResult(self, inputID, lookup):
         assert(inputID not in self.results)
-        self.results[inputID] = result
+        self.results[inputID] = lookup
         if len(self.results) == len(self.inputIDList):
             self.finalize()
 parcels = {}
@@ -192,130 +205,4 @@ for lookupSlice in itertools.islice(lookupIter, batchsize):
         assert(False)
     for i, lookup in enumerate(batch):
         pid = lookupList[i][0]
-        parcels[pid].setResult(lookup.input_id, lookup.result)
-        
-"""
-What's below this is from previous script version, will remove when finished with this version. 
-"""
-        
-class MBLU:
-    def __init__(self, string):
-        self.mbluString = string
-        parts = string.split('/')
-        assert(len(parts) == 5)
-        self.map = parts[0].strip()
-        self.block = parts[1].strip()
-        self.lot = parts[2].strip()
-        self.unit = parts[3].strip()
-
-class Query:
-    def __init__(self, streetAddress, secondary, city, state, street, record):
-        self.streetAddress = streetAddress
-        self.secondary = secondary
-        self.city = city
-        self.state = state
-        self.street = street
-        self.record = record
-    def setCity(self, city):
-        self.city = city
-    def makeStreetLookup(self, input_id):
-        x = StreetLookup()
-        x.input_id = input_id
-        #Note that the Lookup expects street to be the street address i.e. 39 Butler Street, not just the street (Butler Street)
-        x.street = self.streetAddress
-        print('street')
-        print(x.street)
-        if self.secondary:
-            x.secondary = self.secondary
-        x.city = self.city
-        x.state = self.state
-        x.match = 'strict'
-        return x
-
-def breakLocation(location, street):
-    #Extract out any secondary parts of the location, like unit numbers. Return a tuple (primary, secondary)
-    assert(street in location)
-    streetStartIndex = location.find(street)
-    return (location[0:(streetStartIndex + len(street))].strip(), location[(streetStartIndex + len(street))::].strip())
-
-
-outputFile = open(args.output, 'w')
-
-fieldnames = visionHeaders + ['location_valid', 'city', 'zip', 'plus4_code', 'delivery_point', 'location_components', 'location_footnotes', 'location_metadata', 'location_footnote_Csharp', 'location_footnote_Dsharp', 'location_footnote_Fsharp', 'location_footnote_Hsharp', 'location_footnote_Isharp', 'location_footnote_Ssharp', 'location_footnote_Vsharp', 'location_footnote_Wsharp']
-
-footnoteMap = [('location_footnote_Csharp', 'C#'), ('location_footnote_Dsharp', 'D#'), ('location_footnote_Fsharp', 'F#'), ('location_footnote_Hsharp', 'H#'), ('location_footnote_Isharp', 'I#'), ('location_footnote_Ssharp', 'S#'), ('location_footnote_Vsharp', 'V#'), ('location_footnote_Wsharp', 'W#')]
-
-#fieldnames.extend(['owner_address_valid', 'owner_address_components', 'owner_address_analysis', 'owner_address_metadata', 'owner_address_footnote_Csharp', 'owner_address_footnote_Dsharp', 'owner_address_footnote_Fsharp', 'owner_address_footnote_Hsharp', 'owner_address_footnote_Isharp', 'owner_address_footnote_Ssharp', 'owner_address_footnote_Vsharp', 'owner_address_footnote_Wsharp'])
-writer = csv.DictWriter(outputFile, fieldnames=fieldnames, delimiter='\t')
-writer.writeheader()
-
-#ownerAddressToComponents = {}
-
-for streetHeadsTuple in recordIter:
-    queries = []
-    streetHeads = list(streetHeadsTuple)
-    while len(streetHeads) > 0 or len(queries) > 0:
-        while len(queries) < batchSize and len(streetHeads) > 0:
-            head  = streetHeads.pop()
-            if head:
-                city = cities[streetToCityIndex[head['street']][0]]
-                primary, secondary = breakLocation(head['location'], head['street'])
-                queries.append(Query(primary, secondary, city, state, head['street'], dict(head)))
-
-        if queries:
-            lookups = [queries[i].makeStreetLookup(str(i)) for i in range(0, len(queries))]
-            batch = Batch()
-            for x in lookups:
-                print('lookup')
-                print(vars(x))
-                batch.add(x)
-            #assert(len(batch) == len(lookups))
-            try:
-                client.send_batch(batch)
-            except exceptions.SmartyException as err:
-                print(err)
-                assert(False)
-            for i, lookup in enumerate(batch):
-                print('query: ')
-                print(vars(queries[i]))
-                candidates = lookup.result
-                print('candidates')
-                print(candidates)
-                street = queries[i].street
-                cityIndex, numTriesRemaining = streetToCityIndex[street]
-                if len(candidates) == 0:
-                    if numTriesRemaining == 0:
-                        streetToCityIndex[street] = (0, numCities)
-                        #Invalid address. Place into spreadsheet
-                        record = queries[i].record
-                        record['location_valid'] = 'INVALID'
-                        writer.writerow(record)
-                        queries[i] = None
-                    else:
-                        cityIndex = (cityIndex + 1) % numCities
-                        streetToCityIndex[street] = (cityIndex, numTriesRemaining - 1)
-                        queries[i].city = cities[cityIndex]
-                else:
-                    streetToCityIndex[street] = (cityIndex, numCities)
-                    components = candidates[0].components
-                    metadata = candidates[0].metadata
-                    analysis = candidates[0].analysis
-                    #TODO Valid address. Place necessary information into spreadsheet.
-                    record = queries[i].record
-                    record['location_valid'] = 'VALID'
-                    record['city'] = components.city_name
-                    record['zip'] = components.zipcode
-                    record['plus4_code'] = str(components.plus4_code)
-                    record['delivery_point'] = components.delivery_point
-                    record['location_components'] = json.dumps(vars(components))
-                    record['location_metadata'] = json.dumps(vars(metadata))
-                    record['location_footnotes'] = analysis.footnotes
-                    for field, footnote in footnoteMap:                        
-                        if analysis.footnotes and footnote in analysis.footnotes:
-                            record[field] = 'TRUE'
-                    writer.writerow(record)
-                    queries[i] = None                    
-                    
-            queries = [i for i in queries if i]                      
-            
-        
+        parcels[pid].setResult(lookup.input_id, lookup)
