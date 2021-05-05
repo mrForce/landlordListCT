@@ -10,7 +10,8 @@ from smartystreets_python_sdk.us_street import Lookup as StreetLookup
 
 parser = argparse.ArgumentParser(description='Take output from Vision GIS, run building address and owner address through SmartyStreets')
 parser.add_argument('inputTSV', help='Output from Vision script')
-parser.add_argument('cities', help='File containing list of cities within the municipality, seperated by newlines. First should be the first city to try. Note that these are USPS cities. Example: Cos Cob in the town of Greenwich')
+parser.add_argument('city', help='City')
+parser.add_argument('state', help='State')
 parser.add_argument('landuse', help='File containing land use codes we care about')
 parser.add_argument('output', help='Output TSV')
 
@@ -26,10 +27,8 @@ def extractLines(fileName):
             if len(xStrip) > 0:
                 lines.append(xStrip.upper())
     return lines
-state = 'CT'
-cities = extractLines(args.cities)
-numCities = len(cities)
-assert(numCities >= 1)
+state = args.state
+city = args.city
 landUseCodes = set(extractLines(args.landuse))
 visionHeaders = None
 
@@ -49,13 +48,28 @@ class OutputWriter:
         self.footnoteMap = footnoteMap
     def writeRow(self, inputRow, candidate):
         #extract footnotes, write to spreadsheet
-        pass
-
+        components = candidate.components
+        metadata = candidate.metadata
+        analysis = candidate.analysis
+        inputRow['location_valid'] = 'VALID'
+        inputRow['city'] = components.city_name
+        inputRow['zip'] = components.zipcode
+        inputRow['plus4_code'] = str(components.plus4_code)
+        inputRow['delivery_point'] = components.delivery_point
+        inputRow['location_components'] = json.dumps(vars(components))
+        inputRow['location_metadata'] = json.dumps(vars(metadata))
+        inputRow['location_footnotes'] = analysis.footnotes
+        for field, footnote in self.footnoteMap:                        
+            if analysis.footnotes and footnote in analysis.footnotes:
+                inputRow[field] = 'TRUE'
+        self.csvWriter.writerow(inputRow)
 outputHandler = OutputWriter(writer, fieldnames, footnoteMap)
 class Parcel:
-    def __init__(self, pid, mblu, location, firstStreet, firstRow, outputHandler):
+    def __init__(self, pid, mblu, location, city, state, firstStreet, firstRow, outputHandler):
         self.pid = pid
         self.mblu = mblu
+        self.city = city
+        self.state = state
         self.location = location
         self.streets = [firstStreet]
         self.rows = [firstRow]
@@ -75,10 +89,28 @@ class Parcel:
         self.inputIDList = list(range(base, base + len(self.streets)))
         return base + len(self.streets)
     def getLookups(self):
-        #return a list of Lookup objects. Split on the street to remove any unit numbers in the location. Use the MBLU to provide secondary. 
-        pass
-    def writeParcel(self, candidate):
-        pass
+        #return a list of Lookup objects. Split on the street to remove any unit numbers in the location. Use the MBLU to provide secondary.        
+        assert(len(self.inputIDList) == len(self.streets))
+        assert(len(self.streets) == len(self.rows))
+        lookups = []
+        for i in range(0, len(self.rows)):
+            x = StreetLookup()
+            x.input_id = str(self.inputIDList[i])
+            x.match = 'strict'
+            assert(self.streets[i] in self.location)
+            streetStartIndex = self.location.find(self.streets[i])
+            x.street = self.location[0:(streetStartIndex + len(self.streets[i]))].strip()
+            mbluParts = self.mblu.split('/')
+            assert(len(mbluParts) == 5)
+            unit = mbluParts[3].strip()
+            if unit:
+                x.secondary = unit
+            x.city = self.city
+            x.state = self.state
+            lookups.append(x)
+        return lookups
+    def writeParcel(self, candidateRow, candidate):
+        self.outputHandler.writeRow(candidateRow, candidate)
     def signalParcelInvalid(self):
         pass
     def signalParcelContradiction(self):
@@ -96,17 +128,19 @@ class Parcel:
         """
         deliveryPoints = set()
         candidate = None
+        candidateRow = None
         for inputID, result in self.results.items():
             if len(result) > 0:
                 assert(len(result) == 1)
                 candidate = result[0]
+                candidateRow = self.rows[self.inputIDList.index(inputID)]
                 assert(candidate.components.zipcode)
                 assert(candidate.components.plus4_code)
                 assert(candidate.components.delivery_point >= 0)
                 deliveryPoint = str(candidate.components.zipcode) + str(candidate.components.plus4_code) + str(components.delivery_point)
                 deliveryPoints.add(deliveryPoint)
         if len(deliveryPoints) == 1:
-            self.writeParcel(candidate)
+            self.writeParcel(candidateRow, candidate)
         elif len(deliveryPoints) == 0:
             self.signalParcelInvalid()
         else:
@@ -132,7 +166,7 @@ with open(args.inputTSV, 'r') as f:
                 assert(location.strip() == parcels[pid].location)
                 parcels[pid].addStreet(street, row)
             else:
-                parcels[pid] = Parcel(pid, mblu, location, street, row, outputHandler)
+                parcels[pid] = Parcel(pid, mblu, location, city, state, street, row, outputHandler)
 
 base = 0
 for pid, parcel in parcels.items():
